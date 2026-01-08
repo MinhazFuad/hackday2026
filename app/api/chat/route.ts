@@ -11,7 +11,7 @@ export async function POST(req: NextRequest) {
     const { message } = body as { message: string };
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-1.5-flash-001",
       contents: message,
     });
 
@@ -19,8 +19,10 @@ export async function POST(req: NextRequest) {
       reply: response.text,
     });
   } catch (error) {
+    console.error("Gemini API Error:", error);
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return NextResponse.json(
-      { error: "AI response failed" },
+      { error: `Generic Error: ${errorMessage}` },
       { status: 500 }
     );
   }

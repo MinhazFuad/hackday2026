@@ -1,81 +1,169 @@
 "use client";
 
-import { useState } from "react";
-
-type Message = {
-  role: "user" | "bot";
-  text: string;
-};
+import { useEffect, useState } from "react";
+import ThemeToggle from "./components/ThemeToggle";
+import ChatInterface from "./components/ChatInterface";
+import Sidebar from "./components/Sidebar";
+import {
+  ChatSession,
+  Message,
+  getSessions,
+  saveSessions,
+  createNewSession
+} from "./utils/storage";
 
 export default function Home() {
-  const [input, setInput] = useState<string>("");
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [loading, setLoading] = useState<boolean>(false);
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [isBotTyping, setIsBotTyping] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
 
-  const sendMessage = async () => {
-    if (!input.trim()) return;
+  // Load sessions on mount
+  useEffect(() => {
+    const loaded = getSessions();
+    setSessions(loaded);
+    if (loaded.length > 0) {
+      setActiveSessionId(loaded[0].id);
+    } else {
+      handleCreateSession();
+    }
+  }, []);
 
-    setMessages((prev) => [...prev, { role: "user", text: input }]);
-    setLoading(true);
+  // Save whenever sessions change
+  useEffect(() => {
+    if (sessions.length > 0) {
+      saveSessions(sessions);
+    }
+  }, [sessions]);
 
-    const res = await fetch("/api/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: input }),
-    });
+  const activeSession = sessions.find(s => s.id === activeSessionId) || null;
 
-    const data: { reply: string } = await res.json();
+  const handleCreateSession = () => {
+    const newSession = createNewSession();
+    setSessions(prev => [newSession, ...prev]);
+    setActiveSessionId(newSession.id);
+    setIsSidebarOpen(false); // Close mobile sidebar on selection
+  };
 
-    setMessages((prev) => [
-      ...prev,
-      { role: "bot", text: data.reply },
-    ]);
+  const handleDeleteSession = (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    const newSessions = sessions.filter(s => s.id !== id);
+    setSessions(newSessions);
+    saveSessions(newSessions); // Force save immediately for deletion
 
-    setInput("");
-    setLoading(false);
+    if (activeSessionId === id) {
+      setActiveSessionId(newSessions.length > 0 ? newSessions[0].id : null);
+    }
+  };
+
+  const handleSendMessage = async (text: string) => {
+    if (!activeSessionId) return;
+
+    const userMsg: Message = {
+      id: Date.now().toString(),
+      sender: "user",
+      text,
+      timestamp: Date.now(),
+    };
+
+    updateSessionMessages(activeSessionId, userMsg);
+    setIsBotTyping(true);
+
+    try {
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to get response");
+      }
+
+      const botMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        sender: "bot",
+        text: data.reply,
+        timestamp: Date.now(),
+      };
+
+      updateSessionMessages(activeSessionId, botMsg);
+    } catch (error) {
+      console.error("Chat error:", error);
+      const errorMsg: Message = {
+        id: (Date.now() + 1).toString(),
+        sender: "bot",
+        text: "Sorry, I'm having trouble connecting to the AI right now. Please try again later.",
+        timestamp: Date.now(),
+      };
+      updateSessionMessages(activeSessionId, errorMsg);
+    } finally {
+      setIsBotTyping(false);
+    }
+  };
+
+  const updateSessionMessages = (sessionId: string, newMessage: Message) => {
+    setSessions(prev => prev.map(session => {
+      if (session.id === sessionId) {
+        // Auto-rename chat based on first message if generic name
+        let name = session.name;
+        if (session.messages.length === 0) {
+          name = newMessage.text.slice(0, 20) + (newMessage.text.length > 20 ? "..." : "");
+        }
+        return {
+          ...session,
+          name,
+          messages: [...session.messages, newMessage]
+        };
+      }
+      return session;
+    }));
   };
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-black">
-      <div className="w-full max-w-md rounded-xl bg-white dark:bg-zinc-900 p-4 shadow-lg">
-        <h1 className="mb-3 text-center text-xl font-semibold">
-          Gemini Chatbot
-        </h1>
+    <main className="main-layout">
+      {/* Mobile Menu Button */}
+      <button
+        className="mobile-menu-btn"
+        onClick={() => setIsSidebarOpen(true)}
+      >
+        ☰
+      </button>
 
-        <div className="mb-3 h-80 overflow-y-auto rounded border p-3 space-y-2">
-          {messages.map((msg, i) => (
-            <div
-              key={i}
-              className={`max-w-[80%] rounded p-2 text-sm ${
-                msg.role === "user"
-                  ? "ml-auto bg-blue-600 text-white"
-                  : "bg-zinc-200 dark:bg-zinc-800"
-              }`}
-            >
-              {msg.text}
-            </div>
-          ))}
-          {loading && (
-            <p className="text-sm text-zinc-500">Thinking…</p>
-          )}
+      <Sidebar
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onSelectSession={(id) => {
+          setActiveSessionId(id);
+          setIsSidebarOpen(false);
+        }}
+        onCreateSession={handleCreateSession}
+        onDeleteSession={handleDeleteSession}
+        isOpen={isSidebarOpen}
+        onCloseMobile={() => setIsSidebarOpen(false)}
+      />
+
+      <div className="content-area">
+        <div className="top-bar">
+          <h2 className="mobile-title">MinuBot</h2>
+          <ThemeToggle />
         </div>
 
-        <div className="flex gap-2">
-          <input
-            className="flex-1 rounded border px-3 py-2 text-sm dark:bg-zinc-800"
-            placeholder="Type a message..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
+        {activeSession ? (
+          <ChatInterface
+            messages={activeSession.messages}
+            onSendMessage={handleSendMessage}
+            isBotTyping={isBotTyping}
           />
-          <button
-            onClick={sendMessage}
-            className="rounded bg-blue-600 px-4 py-2 text-sm text-white"
-          >
-            Send
-          </button>
-        </div>
+        ) : (
+          <div className="empty-selection">
+            <p>Select a chat or create a new one.</p>
+            <button onClick={handleCreateSession} className="primary-btn">Create New Chat</button>
+          </div>
+        )}
       </div>
-    </div>
+    </main>
   );
 }
